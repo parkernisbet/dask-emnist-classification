@@ -27,7 +27,7 @@ from zipfile import ZipFile
 # downloading and unzipping kaggle images
 paths = ['Train', 'Validation', 'handwritten-characters.zip']
 checks = [os.path.exists(path) for path in paths]
-if set(checks) == {True}:
+if set(checks) != {True}:
     cmd = 'kaggle datasets download -d vaibhao/handwritten-characters'
     check_call(cmd, shell = True)
     with ZipFile('handwritten-characters.zip', 'r') as z:
