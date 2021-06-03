@@ -1,4 +1,6 @@
+/dask-worker-space
 /dataset
 /Train
 /Validation
 handwritten-characters.zip
+main_adelle.ipynb
