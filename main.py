@@ -63,7 +63,7 @@ from hyperopt import fmin, hp, STATUS_OK, tpe
 from joblib import delayed, Parallel, parallel_backend
 from PIL import Image, ImageOps
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import accuracy_score, classification_report, f1_score
 from subprocess import check_call
 from zipfile import ZipFile
 
@@ -193,10 +193,10 @@ initial image set, though this could lead to overfitting in the long run.'''
 
 # %%
 # train test split
-X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, \
-    shuffle = True, test_size = .15, blockwise = False)
-X_train = X_train.rechunk('auto')
-X_test = X_test.rechunk('auto')
+X_train, X_test, y_train, y_test = train_test_split(X_train.compute(), \
+    y_train, shuffle = True, test_size = .15)
+X_train = da.from_array(X_train, chunks = (15625, 1024))
+X_test = da.from_array(X_test, chunks = (15625, 1024))
 
 # %% [md]
 # ### Exploratory Data Analysis <a class="anchor" id="s2"></a>
@@ -331,12 +331,15 @@ print(f'Fit time: {t2 - t1}')
 # %%
 # reducing dask arrays
 X_train = ipca.transform(X_train).rechunk('auto')
+X_test = ipca.transform(X_test).rechunk('auto')
 X_val = ipca.transform(X_val).rechunk('auto')
 
 # %%
 # saving data arrays to pickles
 pickle.dump(X_train, open('X_train.pkl', 'wb'))
 pickle.dump(y_train, open('y_train.pkl', 'wb'))
+pickle.dump(X_test, open('X_test.pkl', 'wb'))
+pickle.dump(y_test, open('y_test.pkl', 'wb'))
 pickle.dump(X_val, open('X_val.pkl', 'wb'))
 pickle.dump(y_val, open('y_val.pkl', 'wb'))
 
@@ -359,32 +362,48 @@ accs = {}
 times = {}
 
 # %%
-# random forest classifier tuning
-space = {'n_estimators': hp.uniform('n_estimators', [50, 100, 150, 200])}
+# random forest tuning
+space = {
+    'max_depth': 1 + hp.randint('max_depth', 9),
+    'max_features': hp.uniform('max_features', .2, .8),
+    'max_samples': hp.uniform('max_samples', .2, .8)}
+X_tr = X_train.compute()
+X_v = X_val.compute()
+X_te = X_test.compute()
 
+def rfc_f1(params):
+    rfc = RandomForestClassifier(**params, n_estimators = 50, n_jobs = -1)
+    rfc.fit(X_tr, y_train)
+    y_pred = rfc.predict(X_v)
+    f1 = f1_score(y_val, y_pred, average = 'macro')
+    return {'loss': -f1, 'status': STATUS_OK}
 
-
+best = fmin(fn = rfc_f1, space = space, algo = tpe.suggest, max_evals = 20)
 
 # %%
 # random forest classifier
 t1 = time.time()
-rfc = RandomForestClassifier(n_estimators = 10, max_depth = 12, n_jobs = -1)
-rfc.fit(X_train, y_train)
-
-accs['rfc'] = classification_report(y_pred.compute(), y_val)
+rfc = RandomForestClassifier(**best, n_estimators = 50, n_jobs = -1)
+rfc.fit(X_tr, y_train)
+y_pred = rfc.predict(X_test)
+accs['rfc'] = (f1_score(y_pred, y_test, average = 'macro'), \
+    accuracy_score(y_pred, y_test))
 t2 = time.time()
-print(t2 - t1, rfc.score(X_val, y_val))
+times['rfc'] = t2 - t1
+print(f'Execution time: {t2 - t1}')
+print(classification_report(y_pred, y_test))
 
 # %%
 # naive bayes classifier
 gnb = GaussianNB()
 t1 = time.time()
-gnb.fit(X_train, y_train)
-y_pred = gnb.predict(X_val)
-accs['gnb'] = classification_report(y_pred.compute(), y_val)
+gnb.fit(X_tr, y_train)
+y_pred = gnb.predict(X_v)
+accs['gnb'] = (f1_score(y_pred, y_test, average = 'macro'), \
+    accuracy_score(y_pred, y_test))
 t2 = time.time()
 times['gnb'] = t2 - t1
-print(accs['gnb'])
+print(classification_report(y_pred, y_val))
 
 # %%
 '''The accuracy for this model is pretty low, though it is included just as a 
