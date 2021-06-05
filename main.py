@@ -28,13 +28,11 @@ numbers (1 - 9), and 4 special characters (@, #, $, &). Note that this
 dataset's author merged the two categories 'O' (letter) and '0' (number) to 
 reduce misclassifiations. The images have already been divided into train and 
 validation folders, each containing subdirectories for all of the above 
-mentioned 39 characters. In contrast to our prior work classifying MNIST 
-numerical digits, this database can be viewed as a multi-faceted data volume 
-expansion: 
+mentioned 39 characters.
 
-    - a 12 fold increase in datapoints
-    - a 3.6 fold increase in classes
-    - a 1.3 fold increase in image size'''
+Our work won't include the entire image set, but rather only a subset. The 
+full dataset suffers from severe class imbalance, so we will be limiting the 
+loading of images to keep all classes equivalent.'''
 
 # %% [md]
 # ### Table of Contents:
@@ -58,16 +56,16 @@ import seaborn as sns
 import time
 from dask import array as da, distributed
 from dask_ml.decomposition import IncrementalPCA
+from dask_ml.model_selection import train_test_split
 from dask_ml.naive_bayes import GaussianNB
 from dask_ml.preprocessing import StandardScaler
-from dask_ml.xgboost import XGBClassifier
+from hyperopt import fmin, hp, STATUS_OK, tpe
 from joblib import delayed, Parallel, parallel_backend
 from PIL import Image, ImageOps
-from sklearn.metrics import confusion_matrix
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix, classification_report
 from subprocess import check_call
 from zipfile import ZipFile
-
-# %%
 
 # %% [md]
 '''The below cell skip re-downloading the .zip file if said zip file and the 
@@ -89,9 +87,38 @@ if set(checks) != {True}:
     except:
         pass
 
+# %%
+# checking class imbalance
+counter = lambda x: len(os.listdir(x))
+dirs = sorted(os.listdir('Train'))
+train_counts = {}
+val_counts = {}
+for dir in dirs:
+    train_counts[dir] = len(os.listdir(f'Train/{dir}'))
+    val_counts[dir] = len(os.listdir(f'Validation/{dir}'))
+
+# %%
+# visualizing dirstributions
+for end, full in zip(['train', 'val'], ['Training', 'Validation']):
+    fig, ax = plt.subplots()
+    fig.set_size_inches(10, 10)
+    exec(f'ax.bar({end}_counts.keys(), {end}_counts.values())')
+    ax.set_title(f'{full} Class Distribution')
+    ax.set_xlabel('Class')
+    ax.set_ylabel('Number of Samples')
+    plt.show()
+
 # %% [md]
-'''The 'to_array' function pads all images that do not match a size of (32, 32) 
-with a 2px border.'''
+'''In both the training and validation directories there look to be rather 
+serious class imbalances, centered mostly on numbers 1 - 9 (excluding 7). 
+Some sklearn modules do have the ability to counteract this with a built in 
+'class_weight' parameter (by inverse weighting majority classes during 
+training), though to be safe we only going to load in enough images so that all 
+classes remain equal.'''
+
+# %% [md]
+'''The 'to_array' function below pads all images that do not match a size of 
+(32, 32) with a 2px border.'''
 
 # %%
 # functions to load images
@@ -124,12 +151,15 @@ def load_from_path(path):
 
     '''
 
+    limit = min(train_counts.values()) if path == 'Train' else \
+        min(val_counts.values())
     path = path + '/' if path[-1] != '/' else path
     children = os.listdir(path)
     imgs = []
     labs = []
     for dir in children:
         files = os.listdir(path + dir)
+        files = random.sample(files, limit)
         imgs.extend(Parallel(n_jobs = -1)(delayed(to_array)(path + dir + '/' \
             + f) for f in files))
         labs.extend([dir]*len(files))
@@ -154,33 +184,28 @@ print(f'Execution time: {t2 - t1}')
 print(f'Images loaded: {X_val.shape[0]}')
 
 # %% [md]
+'''In total we will be working with 170820 images, quite a bit less than the 
+original dataset. Outside of this project, something to explore here would be 
+to try to generate more images from the original set, albeit with minor 
+transformations to give the illusion of uniqueness (shifts, skews, scales, 
+etc.). This would allow for us to take advantage of a larger portion of the 
+initial image set, though this could lead to overfitting in the long run.'''
+
+# %%
+# train test split
+X_train, X_test, y_train, y_test = train_test_split(X_train, y_train, \
+    shuffle = True, test_size = .15, blockwise = False)
+X_train = X_train.rechunk('auto')
+X_test = X_test.rechunk('auto')
+
+# %% [md]
 # ### Exploratory Data Analysis <a class="anchor" id="s2"></a>
 
 # %%
 # creating dask client
 client = distributed.client._get_global_client() or \
-    distributed.Client(processes = False)
+    distributed.Client(n_workers = 1, processes = False)
 print(client)
-
-# %%
-# visualizing training and test class breakdowns
-classes, counts = [], []
-for end, full in zip(['train', 'val'], ['Train', 'Validation']):
-    exec(f'classes, counts = np.unique(y_{end}, return_counts = True)')
-    fig, ax = plt.subplots()
-    fig.set_size_inches(10, 10)
-    ax.bar(classes, counts)
-    ax.set_title(f'{full} Class Size Distribution')
-    ax.set_xlabel('Class')
-    ax.set_ylabel('Number of Samples')
-    plt.show()
-
-# %% [md]
-'''In both the training and validation dataframes there look to be rather 
-serious class imbalances, centered mostly on numbers 1 - 9 and excluding 7. 
-Sklearn's SVC classifier has a built in class_weight parameter to combat this, 
-though depending on compute times we may seek to manually prune data points 
-from majority classes.'''
 
 # %%
 # dataset describe
@@ -190,8 +215,8 @@ print(pd.DataFrame(X_train[:, np.r_[ind]].compute(), \
     columns = [f'feature {str(x)}' for x in ind]).describe())
 
 # %% [md]
-'''Although the above print is only for 12 random dataframe columns, it is 
-still rather representative of most other columns. The dataframe is a "mostly" 
+'''Although the above print is only for 12 random array columns, it is 
+still rather representative of most other columns. The array is a "mostly" 
 sparse matrix with values "mostly" ranging from 0 to 255, though there are some 
 columns that run contrary to this.'''
 
@@ -206,6 +231,7 @@ print(f'X_val sparseness: {round(100*zeros/total, 2)}%')
 
 # %%
 # plotting mean character plots
+classes = train_counts.keys()
 indices = lambda x: np.where(y_train == x)
 mean_row = lambda x: np.mean(x, axis = 0)
 means = Parallel(n_jobs = -1)(delayed(mean_row)(
@@ -220,10 +246,20 @@ for num, arr in enumerate(means):
 plt.show()
 
 # %% [md]
+'''Note that some letters are a combination of both lower and upper case 
+characters. This should make for some added complexity when trying to predict 
+from our constructed models.'''
+
+# %% [md]
 # ### Feature Space Reduction <a class="anchor" id="s3"></a>
 
 # %% [md]
-'''At the moment, '''
+'''Normally there are quite a few methods we could use from sklearn to reduce 
+our total features, though not all of these are easily parallelizable 
+with Dask. Lucky for us, dask_ml includes a pre-built version of sklearn's 
+'IncrementalPCA' module that plays nice with Dask's backend. The only caveat is 
+that the dask_ml implementation doesn't completely scale the input data (only a 
+mean centering), so we will be scaling it first.'''
 
 # %%
 # scaling arrays
@@ -277,6 +313,12 @@ for i, tol in enumerate([.95, .99]):
     ns.append(find_n(ratios, tol))
     print(f'Optimal n, tol = {tol}: {ns[i]}')
 
+# %% [md]
+'''PCA allows for a more than 50% reduction in feature count, while only 
+incurring a 5% loss in explained variance. For datasets orders of magnitude 
+larger than ours, this would have critical impacts on training times and 
+storage size.'''
+
 # %%
 # refitting pca model for .95
 ipca = IncrementalPCA(n_components = ns[0], batch_size = 15625)
@@ -287,7 +329,7 @@ t2 = time.time()
 print(f'Fit time: {t2 - t1}')
 
 # %%
-# transforming dask arrays
+# reducing dask arrays
 X_train = ipca.transform(X_train).rechunk('auto')
 X_val = ipca.transform(X_val).rechunk('auto')
 
@@ -302,61 +344,53 @@ pickle.dump(y_val, open('y_val.pkl', 'wb'))
 # ### Classification / Evaluation <a class="anchor" id="s4"></a>
 
 # %% [md]
-'''This section is more of a three-for-one, as it includes construction of the 
-underlying XGBoost classifier, incremental hyperparameter tuning to lock in an 
-optimal configuration, and then finally scoring using the validation set.'''
+'''This section is more of a three-for-one, as it includes classifier 
+construction, hyperparameter tuning to lock in an optimal configuration, and 
+test set scoring.'''
 
 # %%
-# encoding labels as numbers
-maps = {char: num for num, char in enumerate(classes)}
-to_num = lambda x: maps[x]
-y_train = da.from_array(np.array(list(map(to_num, y_train.flatten()))), \
-    chunks = (31250))
-y_val = da.from_array(np.array(list(map(to_num, y_val.flatten()))), \
-    chunks = (31250))
+# loading variables from disk
+for var in ['X_train', 'y_train', 'X_val', 'y_val']:
+    exec(f'{var} = pickle.load(open("{var}.pkl", "rb"))')
 
 # %%
-# training xgboost classifier
-xgb = XGBClassifier(booster = 'gbtree', objective = 'multi:softprob', \
-    max_delta_step = 1, eval_metric = 'auc', seed = 42, max_depth = 6, \
-    min_child_weight = 2, subsample = .5, num_parallel_trees = 12, \
-    use_label_encoder = False, verbosity = 2, colsample_bytree = .5, \
-    n_estimators = 200)
-# params = {'max_depth': list(range(4, 16)), \
-#     'min_child_weight': list(range(1, 20, 2)), \
-#     'subsample': np.linspace(.5, 1.0, 10)}
-# search = HyperbandSearchCV(xgb, params, max_iter = 30, aggressiveness = 4)
+# model accuracies
+accs = {}
+times = {}
+
+# %%
+# random forest classifier tuning
+space = {'n_estimators': hp.uniform('n_estimators', [50, 100, 150, 200])}
+
+
+
+
+# %%
+# random forest classifier
 t1 = time.time()
-# search.fit(X_train, y_train)
-xgb.fit(X_train, y_train, classes = np.unique(y_train))
-t2 = time.time()
-print(t2 - t1)
-print(xgb.best_params_)
-pickle.dump(xgb, open('xgb.pkl', 'wb'))
+rfc = RandomForestClassifier(n_estimators = 10, max_depth = 12, n_jobs = -1)
+rfc.fit(X_train, y_train)
 
-# %%
-y_train = pickle.load(open('y_train.pkl'))
-y_val = pickle.load(open('y_val.pkl'))
+accs['rfc'] = classification_report(y_pred.compute(), y_val)
+t2 = time.time()
+print(t2 - t1, rfc.score(X_val, y_val))
 
 # %%
 # naive bayes classifier
 gnb = GaussianNB()
 t1 = time.time()
 gnb.fit(X_train, y_train)
+y_pred = gnb.predict(X_val)
+accs['gnb'] = classification_report(y_pred.compute(), y_val)
 t2 = time.time()
+times['gnb'] = t2 - t1
+print(accs['gnb'])
 
 # %%
-y_pred = gnb.predict(X_val).compute()
+'''The accuracy for this model is pretty low, though it is included just as a 
+baseline. The NB model did well at classifying 
+'''
 
-# %%
-# random forest classifier
-from sklearn.ensemble import RandomForestClassifier
-
-t1 = time.time()
-rfc = RandomForestClassifier(n_estimators = 10, max_depth = 12, n_jobs = -1)
-rfc.fit(X_train, y_train)
-t2 = time.time()
-print(t2 - t1, rfc.score(X_val, y_val))
 
 # %%
 # closing dask client
