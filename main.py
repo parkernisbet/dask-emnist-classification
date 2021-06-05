@@ -8,6 +8,9 @@
 #       format_name: percent
 #       format_version: '1.3'
 #       jupytext_version: 1.11.2
+#   kernelspec:
+#     display_name: 'Python 3.8.10 64-bit (''dask-emnist-classification'': conda)'
+#     name: python3810jvsc74a57bd0e0382ef1c83131cfeb874d87de5e7d67def5053e899291e6ac2b03aaa547e028
 # ---
 
 # %% {"active": "py"}
@@ -68,7 +71,7 @@ from subprocess import check_call
 from zipfile import ZipFile
 
 # %% [md]
-'''The below cell skip re-downloading the .zip file if said zip file and the 
+'''The below cell skips re-downloading the .zip file if said zip file and the 
 train / validation folders are present in the current directory. Unzipping the 
 dataset may take a while depending upon computer specs, it is expanding from 
 1.7GB to a little over 3.3GB.'''
@@ -174,6 +177,7 @@ X_train, y_train = load_from_path('Train')
 t2 = time.time()
 print(f'Execution time: {t2 - t1}')
 print(f'Images loaded: {X_train.shape[0]}')
+print(f'Images per class: {X_train.shape[0]/39}')
 
 # %%
 # same for validation data
@@ -182,6 +186,7 @@ X_val, y_val = load_from_path('Validation')
 t2 = time.time()
 print(f'Execution time: {t2 - t1}')
 print(f'Images loaded: {X_val.shape[0]}')
+print(f'Images per class: {X_val.shape[0]/39}')
 
 # %% [md]
 '''In total we will be working with 170820 images, quite a bit less than the 
@@ -389,28 +394,64 @@ model.'''
 #     score = f1_score(y_val, y_pred, average = 'macro')
 #     return {'loss': -score, 'status': STATUS_OK}
 
-# space = {'max_depth': 4 + hp.randint('max_depth', 4),
-#     }
+# space = {'max_depth': 2 + hp.randint('max_depth', 6)}
 # trials = Trials()
 # best = fmin(fn = lgb_loss, space = space, algo = tpe.suggest, max_evals = 4, \
 #     trials = trials)
 # print(best)
 
+# %% [md]
+'''The tuning cell has been commented out, but it can be run if desired. The 
+optimal parameters shift around a bit, but the best working ranges are: 
+'n_estimators' (40, 60) and 'max_depth' (4, 8).'''
+
 # %%
 # lightgbm classifier
 t1 = time.time()
 dlgb = DaskLGBMClassifier(max_depth = 8, tree_learner = 'data', \
-    n_estimators = 45)
+    n_estimators = 50)
 dlgb.fit(X_train, da.from_array(y_train, chunks = 31250))
 y_pred = dlgb.predict(X_test).compute()
 accs['lgb'] = (f1_score(y_test, y_pred, average = 'macro'), \
     accuracy_score(y_test, y_pred))
 t2 = time.time()
-times['gnb'] = t2 - t1
+times['lgb'] = t2 - t1
 print(classification_report(y_test, y_pred))
 
 # %%
+# saving model
+pickle.dump(dlgb, open('lightgbm.pkl', 'wb'))
 
+# %%
+# comparing models
+print('Execution times: (s)\n', times, '\n')
+print('Test Data Accuracy: (f1, accuracy)\n', accs, '\n')
+
+# %% [md]
+'''Certainly it is apparent that the lightgbm classifier took significantly 
+longer to train, but that extra time paid off dividends in overall accuracy. 
+With a bit more tuning, the low 80s might be achievable for the lightgbm model, 
+and perhaps even higher with a larger train dataset. The Kaggle author noted 
+that his personally built model was 92.7% accurate, another jump up from ours. 
+
+The last section of code in this notebook reverses the transformations on the 
+test set so we can inspect the validity of misclassifications. Only a couple 
+random instances were sampled, but you get an idea of what information was 
+lost during the dimensional reduction.
+'''
+
+# %%
+# converting back to images
+ind = np.where(y_pred != y_test)[0][:15]
+misses = ss.inverse_transform(ipca.inverse_transform(X_test[ind]))
+fig, ax = plt.subplots(5, 3)
+fig.set_size_inches(12, 25)
+for num in range(len(misses)):
+    plt.subplot(5, 3, num + 1)
+    s = sns.heatmap(misses[num].reshape((32, 32)), cmap = 'binary_r', \
+        cbar = False, xticklabels = [], yticklabels = [])
+    s.set_title(f'True = {y_test[ind[num]]}, Prediction: {y_pred[ind[num]]}')
+plt.show()
 
 # %%
 # closing dask client

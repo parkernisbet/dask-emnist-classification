@@ -1,5 +1,9 @@
 # Dask EMNIST Classification
 
-Class project for DSE230. Initial plan is to build a distributed SVC model covering 39 categories of handwritten characters. Image dataset will be sourced from [Kaggle](https://www.kaggle.com/vaibhao/handwritten-characters), and consists of approximately 857000 files. Off the bat there looks to be rather significant class imbalance, so our resulting work will have to account for this (through model-level class weighting, dataset-level minority class generation, or some combination of both).
+Final class project for DSE230. Initial plan is to build a distributed boosted decision trees model (LightGBM) covering 39 categories of handwritten characters. The image dataset will be sourced from [Kaggle](https://www.kaggle.com/vaibhao/handwritten-characters), and consists of approximately 857000 image files. Off the bat there looks to be rather significant class imbalance, so our working set of files will need to be reduced to even out these ratios.
 
-As for possible avenues of exploration, comparisons with any of the following would be a good start: self-trained neural network, cloud-hosted image recognition API, or a transfer learned ImageNet model. Alternatively, our model could be the backend for a web-based real time classification tool.
+The project directory contains four files, this README.md, a Python script 'main.py', a Jupyter Notebook 'main.ipynb', and a 'requirements.txt' file. The project was developed predominantly in the .py file, then later converted to a Jupyter notebook via Jupytext.
+
+The notebook is self-contained, and will download all necessary files once run. Some steps are rather time consuming, particularly the unzipped of the image directories, dimension reduction, and hyperparameter tuning. The notebook won't automatically install packages required to run, instead a 'requirements.txt' file is provided to streamline installation and setup of your Python environment.
+
+Execution was completed on a AMD Ryzen 3700X and 32 GB of RAM, so all times recorded in the notebook are a reflection of that. Some steps are memory intensive and so workers with less than 6GB of RAM, or systems with less than 16GB of RAM total will likely not be able to run this notebook.
