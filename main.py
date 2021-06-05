@@ -62,7 +62,6 @@ from dask_ml.preprocessing import StandardScaler
 from hyperopt import fmin, hp, STATUS_OK, tpe
 from joblib import delayed, Parallel, parallel_backend
 from PIL import Image, ImageOps
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from subprocess import check_call
 from zipfile import ZipFile
@@ -204,7 +203,7 @@ X_test = da.from_array(X_test, chunks = (15625, 1024))
 # %%
 # creating dask client
 client = distributed.client._get_global_client() or \
-    distributed.Client(n_workers = 1, processes = False)
+    distributed.Client(n_workers = 2, processes = False)
 print(client)
 
 # %%
@@ -362,54 +361,36 @@ accs = {}
 times = {}
 
 # %%
-# random forest tuning
-space = {
-    'max_depth': 1 + hp.randint('max_depth', 9),
-    'max_features': hp.uniform('max_features', .2, .8),
-    'max_samples': hp.uniform('max_samples', .2, .8)}
-X_tr = X_train.compute()
-X_v = X_val.compute()
-X_te = X_test.compute()
-
-def rfc_f1(params):
-    rfc = RandomForestClassifier(**params, n_estimators = 50, n_jobs = -1)
-    rfc.fit(X_tr, y_train)
-    y_pred = rfc.predict(X_v)
-    f1 = f1_score(y_val, y_pred, average = 'macro')
-    return {'loss': -f1, 'status': STATUS_OK}
-
-best = fmin(fn = rfc_f1, space = space, algo = tpe.suggest, max_evals = 20)
-
-# %%
-# random forest classifier
-t1 = time.time()
-rfc = RandomForestClassifier(**best, n_estimators = 50, n_jobs = -1)
-rfc.fit(X_tr, y_train)
-y_pred = rfc.predict(X_test)
-accs['rfc'] = (f1_score(y_pred, y_test, average = 'macro'), \
-    accuracy_score(y_pred, y_test))
-t2 = time.time()
-times['rfc'] = t2 - t1
-print(f'Execution time: {t2 - t1}')
-print(classification_report(y_pred, y_test))
 
 # %%
 # naive bayes classifier
 gnb = GaussianNB()
 t1 = time.time()
-gnb.fit(X_tr, y_train)
-y_pred = gnb.predict(X_v)
-accs['gnb'] = (f1_score(y_pred, y_test, average = 'macro'), \
+gnb.fit(X_train, y_train)
+y_pred = gnb.predict(X_test).compute()
+accs['gnb'] = (f1_score(y_pred, y_test, average = 'macro', zero_division = 0), \
     accuracy_score(y_pred, y_test))
 t2 = time.time()
 times['gnb'] = t2 - t1
-print(classification_report(y_pred, y_val))
+print(classification_report(y_pred, y_test, zero_division = 0))
 
 # %%
-'''The accuracy for this model is pretty low, though it is included just as a 
-baseline. The NB model did well at classifying 
+'''The accuracy for the above two models are low, but this can be attributed to 
+limited samples from each class. The 
 '''
 
+# %%
+import lightgbm
+from dask.diagnostics import ProgressBar
+
+dlgb = lightgbm.DaskLGBMClassifier(max_depth = 8, tree_learner = 'data', \
+    n_estimators = 50)
+
+with ProgressBar():
+    dlgb.fit(X_train, da.from_array(y_train, chunks = 31250))
+
+# %%
+print(classification_report(y_val, y_pred))
 
 # %%
 # closing dask client
