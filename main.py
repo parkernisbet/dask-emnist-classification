@@ -18,7 +18,7 @@
 
 # %% [md]
 '''This notebook explores handwritten character classification using 
-Dask-parallelized gradient boosted decision trees (XGBoost). The dataset was 
+Dask-parallelized gradient boosted decision trees (LightGBM). The dataset was 
 sourced from [Kaggle](https://www.kaggle.com/vaibhao/handwritten-characters) 
 and is a semi-subset of the more well known 
 [Extended MNIST](https://www.nist.gov/itl/products-and-services/emnist-dataset) 
@@ -59,8 +59,9 @@ from dask_ml.decomposition import IncrementalPCA
 from dask_ml.model_selection import train_test_split
 from dask_ml.naive_bayes import GaussianNB
 from dask_ml.preprocessing import StandardScaler
-from hyperopt import fmin, hp, STATUS_OK, tpe
+from hyperopt import fmin, hp, STATUS_OK, tpe, Trials
 from joblib import delayed, Parallel, parallel_backend
+from lightgbm import DaskLGBMClassifier
 from PIL import Image, ImageOps
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 from subprocess import check_call
@@ -265,6 +266,7 @@ mean centering), so we will be scaling it first.'''
 ss = StandardScaler()
 ss.fit(X_train)
 X_train = ss.transform(X_train)
+X_test = ss.transform(X_test)
 X_val = ss.transform(X_val)
 
 # %%
@@ -361,36 +363,54 @@ accs = {}
 times = {}
 
 # %%
-
-# %%
 # naive bayes classifier
 gnb = GaussianNB()
 t1 = time.time()
 gnb.fit(X_train, y_train)
 y_pred = gnb.predict(X_test).compute()
-accs['gnb'] = (f1_score(y_pred, y_test, average = 'macro', zero_division = 0), \
-    accuracy_score(y_pred, y_test))
+accs['gnb'] = (f1_score(y_test, y_pred, average = 'macro'), \
+    accuracy_score(y_test, y_pred))
 t2 = time.time()
 times['gnb'] = t2 - t1
-print(classification_report(y_pred, y_test, zero_division = 0))
+print(classification_report(y_test, y_pred))
 
 # %%
-'''The accuracy for the above two models are low, but this can be attributed to 
-limited samples from each class. The 
-'''
+'''The accuracy for the above model is quite low, but this can be (at least 
+partially) attributed to limited samples from each class. Not to worry though, 
+this model was added as a quick-training baseline to contrast with our lightgbm 
+model.'''
 
 # %%
-import lightgbm
-from dask.diagnostics import ProgressBar
+# lightgbm tuning
+# def lgb_loss(params):
+#     lgb = DaskLGBMClassifier(**params, n_estimators = 50)
+#     lgb.fit(X_train, da.from_array(y_train, chunks = 31250))
+#     y_pred = lgb.predict(X_val).compute()
+#     score = f1_score(y_val, y_pred, average = 'macro')
+#     return {'loss': -score, 'status': STATUS_OK}
 
-dlgb = lightgbm.DaskLGBMClassifier(max_depth = 8, tree_learner = 'data', \
-    n_estimators = 50)
-
-with ProgressBar():
-    dlgb.fit(X_train, da.from_array(y_train, chunks = 31250))
+# space = {'max_depth': 4 + hp.randint('max_depth', 4),
+#     }
+# trials = Trials()
+# best = fmin(fn = lgb_loss, space = space, algo = tpe.suggest, max_evals = 4, \
+#     trials = trials)
+# print(best)
 
 # %%
-print(classification_report(y_val, y_pred))
+# lightgbm classifier
+t1 = time.time()
+dlgb = DaskLGBMClassifier(max_depth = 8, tree_learner = 'data', \
+    n_estimators = 45)
+dlgb.fit(X_train, da.from_array(y_train, chunks = 31250))
+y_pred = dlgb.predict(X_test).compute()
+accs['lgb'] = (f1_score(y_test, y_pred, average = 'macro'), \
+    accuracy_score(y_test, y_pred))
+t2 = time.time()
+times['gnb'] = t2 - t1
+print(classification_report(y_test, y_pred))
+
+# %%
+
 
 # %%
 # closing dask client
