@@ -1,6 +1,6 @@
 # Dask EMNIST Classification
 
-Final class project for DSE230. Initial plan is to build a distributed boosted decision trees model (LightGBM) covering 39 categories of handwritten characters. The image dataset will be sourced from [Kaggle](https://www.kaggle.com/vaibhao/handwritten-characters), and consists of approximately 857000 image files. Off the bat there looks to be rather significant class imbalance, so our working set of files will need to be reduced to even out these ratios.
+Initial plan is to build a distributed boosted decision trees model (LightGBM) covering 39 categories of handwritten characters. The image dataset will be sourced from [Kaggle](https://www.kaggle.com/vaibhao/handwritten-characters), and consists of approximately 857000 image files. Off the bat there looks to be rather significant class imbalance, so our working set of files will need to be reduced to even out these ratios.
 
 The project directory contains four files, this README.md, a Python script 'main.py', a Jupyter Notebook 'main.ipynb', and a 'requirements.txt' file. The project was developed predominantly in the .py file, then later converted to a Jupyter notebook via Jupytext.
 
